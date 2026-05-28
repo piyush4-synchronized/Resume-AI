@@ -6,12 +6,20 @@ import pdfplumber
 import re
 import os
 import io
+import sys
+
+# ── Fix for pickle deserialization ──────────────────────────────────────────
+# The .pkl was trained with split_skills defined in __main__.
+# We must inject it into __main__ BEFORE joblib.load() so pickle can find it.
+def split_skills(text):
+    return text.split(', ')
+
+import __main__
+__main__.split_skills = split_skills
+# ────────────────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
 CORS(app)
-
-def split_skills(text):
-    return text.split(', ')
 
 model = joblib.load('resume_scorer_pipeline.pkl')
 
