@@ -21,7 +21,7 @@ __main__.split_skills = split_skills
 app = Flask(__name__)
 CORS(app)
 
-model = joblib.load('resume_scorer_pipeline.pkl')
+model = joblib.load('resume_scorer_pipeline.pkl', mmap_mode='r')
 
 # ── File parsers ────────────────────────────────────────────────────────────
 def extract_text_from_pdf(file_stream):
@@ -1057,6 +1057,10 @@ def score_resume():
 
         analysis = analyze_resume(raw_text, job_role)
         final_score = score_text(analysis['found_skills'], analysis['exp'], job_role)
+
+        import gc
+        del raw_text
+        gc.collect()
 
         return jsonify({
             "success": True,
