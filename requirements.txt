@@ -6,3 +6,4 @@ xgboost
 pdfplumber
 Werkzeug
 joblib
+gunicorn
