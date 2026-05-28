@@ -1,0 +1,8 @@
+Flask
+flask-cors
+pandas
+scikit-learn
+xgboost
+pdfplumber
+Werkzeug
+joblib
