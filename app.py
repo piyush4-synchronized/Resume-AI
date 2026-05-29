@@ -21,7 +21,14 @@ __main__.split_skills = split_skills
 app = Flask(__name__)
 CORS(app)
 
-model = joblib.load('resume_scorer_pipeline.pkl', mmap_mode='r')
+# ── Lazy singleton — loads once on first request, stays in memory ────────────
+_model = None
+
+def get_model():
+    global _model
+    if _model is None:
+        _model = joblib.load('resume_scorer_pipeline.pkl')
+    return _model
 
 # ── File parsers ────────────────────────────────────────────────────────────
 def extract_text_from_pdf(file_stream):
@@ -214,7 +221,7 @@ def score_text(found_skills, exp, job_role=DEFAULT_ROLE):
     # Safely count skills (if the list is empty, it's 0)
     user_data['Total_Skills']      = len(found_skills)
     user_data['Projects_Per_Year'] = user_data['Projects Count'] / (user_data['Experience (Years)'] + 1)
-    score = model.predict(user_data)[0]
+    score = get_model().predict(user_data)[0]
     return round(max(0, min(100, float(score))), 2)
 
 
@@ -1058,10 +1065,6 @@ def score_resume():
         analysis = analyze_resume(raw_text, job_role)
         final_score = score_text(analysis['found_skills'], analysis['exp'], job_role)
 
-        import gc
-        del raw_text
-        gc.collect()
-
         return jsonify({
             "success": True,
             "job_role": job_role,
@@ -1108,4 +1111,5 @@ def score_resume_text():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
