@@ -23,7 +23,7 @@ app = Flask(__name__)
 CORS(app)
 
 # ── Groq client ──────────────────────────────────────────────────────────────
-groq_client = Groq(api_key=os.environ.get("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"))
+groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 GROQ_MODEL  = "llama-3.3-70b-versatile"
 
 # ── Lazy model loader ────────────────────────────────────────────────────────
