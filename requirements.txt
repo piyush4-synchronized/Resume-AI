@@ -9,3 +9,4 @@ xgboost
 numpy
 groq
 python-dotenv
+gunicorn
