@@ -1,11 +1,11 @@
 flask
 flask-cors
-gunicorn
 joblib
 pandas
 pdfplumber
 python-docx
-scikit-learn==1.6.1
+scikit-learn
 xgboost
 numpy
 groq
+python-dotenv

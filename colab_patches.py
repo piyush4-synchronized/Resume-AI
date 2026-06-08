@@ -3,6 +3,9 @@
 # notebook AFTER the existing "LOAD DATASET" section.
 # ============================================================
 
+# ── PATCH 0: Install Google Generative AI SDK (run once) ────
+# !pip install google-generativeai
+
 # ── PATCH 1: Richer feature engineering ─────────────────────
 #
 # Problem: your original model received hardcoded defaults
@@ -34,7 +37,6 @@ df['Total_Skills']      = df['Skills'].apply(lambda x: len(str(x).split(',')))
 df['Projects_Per_Year'] = df['Projects Count'] / (df['Experience (Years)'] + 1)
 
 # ── PATCH 1d: Skill × Experience interaction ─────────────────
-# Captures that 5 skills + 8 years >> 5 skills + 0 years.
 df['Skill_Exp_Score'] = df['Total_Skills'] * np.log1p(df['Experience (Years)'])
 
 print("Feature columns:")
@@ -55,17 +57,12 @@ def split_skills(text):
 
 preprocessor = ColumnTransformer(
     transformers=[
-        # Original: bag-of-words on skill list
         ('skills_encoder',
          CountVectorizer(tokenizer=split_skills, binary=True, token_pattern=None),
          'Skills'),
-
-        # Original: one-hot for Education, Certifications, Job Role
         ('cat_encoder',
          OneHotEncoder(handle_unknown='ignore'),
          ['Education', 'Certifications', 'Job Role']),
-
-        # UPDATED: now includes Edu_Tier, Has_Cert, Skill_Exp_Score
         ('num_scaler',
          StandardScaler(),
          [
@@ -73,9 +70,9 @@ preprocessor = ColumnTransformer(
              'Projects Count',
              'Total_Skills',
              'Projects_Per_Year',
-             'Edu_Tier',       # NEW
-             'Has_Cert',       # NEW
-             'Skill_Exp_Score' # NEW
+             'Edu_Tier',        # NEW
+             'Has_Cert',        # NEW
+             'Skill_Exp_Score'  # NEW
          ]),
     ]
 )
@@ -91,11 +88,11 @@ X_train, X_test, y_train, y_test = train_test_split(
 model_pipeline = Pipeline(steps=[
     ('preprocessor', preprocessor),
     ('regressor', XGBRegressor(
-        n_estimators=300,      # up from 200
-        learning_rate=0.08,    # slightly lower for better generalisation
+        n_estimators=300,
+        learning_rate=0.08,
         max_depth=5,
-        subsample=0.85,        # NEW: row subsampling reduces overfitting
-        colsample_bytree=0.8,  # NEW: column subsampling
+        subsample=0.85,
+        colsample_bytree=0.8,
         random_state=42
     ))
 ])
@@ -120,14 +117,36 @@ from google.colab import files
 files.download('resume_scorer_pipeline.pkl')
 
 
-# ── PATCH 5: What to change in app.py score_text() ───────────
+# ── PATCH 5: Changes made in app.py (Google AI Studio edition) ──
 #
-# Your app.py score_text() must now pass the three new columns.
-# The updated app.py (provided separately) already does this:
+# REMOVED  (Groq):
+#   from groq import Groq
+#   groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 #
-#   user_data['Edu_Tier']       = EDU_TIER_MAP.get(education, 2)
-#   user_data['Has_Cert']       = 0 if certification == 'None' else 1
-#   user_data['Skill_Exp_Score']= len(found_skills) * np.log1p(exp)
+# ADDED  (Google Generative AI):
+#   import google.generativeai as genai
+#   genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
+#   gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 #
-# Make sure you re-export the .pkl from this updated notebook
-# before deploying the new app.py.
+# REMOVED  groq_generate() helper:
+#   groq_client.chat.completions.create(model="llama-3.3-70b-versatile", ...)
+#
+# REPLACED with  gemini_generate() helper:
+#   response = gemini_model.generate_content(
+#       prompt,
+#       generation_config=genai.types.GenerationConfig(
+#           max_output_tokens=max_output_tokens,
+#           temperature=0.7,
+#       )
+#   )
+#   return response.text.strip()
+#
+# ENVIRONMENT VARIABLE:
+#   Old:  GROQ_API_KEY
+#   New:  GOOGLE_API_KEY   ← set this in your deployment environment
+#
+# MODEL USED:  gemini-1.5-flash  (fast, generous free quota on AI Studio)
+#   Upgrade to "gemini-1.5-pro" for better JSON accuracy on complex prompts.
+#
+# All feature engineering columns (Edu_Tier, Has_Cert, Skill_Exp_Score)
+# remain unchanged — only the LLM call layer was swapped.
