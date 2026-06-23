@@ -1,60 +1,47 @@
-# =============================================================================
-# AI Resume Screening — requirements.txt
+# AI Resume Screening - requirements.txt
 # Install with: pip install -r requirements.txt
-# =============================================================================
 
-# ── Web framework ─────────────────────────────────────────────────────────────
+# Web framework
 flask>=3.0.0
 flask-cors>=4.0.0
 flask-sqlalchemy>=3.1.0
 
-# ── Security ──────────────────────────────────────────────────────────────────
+# Security
 werkzeug>=3.0.0
 
-# ── Environment ───────────────────────────────────────────────────────────────
+# Environment
 python-dotenv>=1.0.0
 
-# ── AI / LLM ─────────────────────────────────────────────────────────────────
+# AI / LLM
 groq>=0.9.0
 
-# ── ML models (both .pkl files depend on these — do NOT upgrade major versions
-#    without retraining, as sklearn/xgboost serialization is version-sensitive) ─
+# ML models
+# The .pkl files are version-sensitive. Avoid major version upgrades unless
+# the models are retrained and re-exported.
 scikit-learn>=1.3.0,<2.0.0
 xgboost>=2.0.0,<3.0.0
 joblib>=1.3.0
 
-# ── Data processing ───────────────────────────────────────────────────────────
+# Data processing
 pandas>=2.0.0
 numpy>=1.24.0
 
-# ── Resume file parsing ───────────────────────────────────────────────────────
-pdfplumber>=0.10.0          # PDF text extraction
-python-docx>=1.1.0          # DOCX parsing
+# Resume file parsing
+pdfplumber>=0.10.0
+python-docx>=1.1.0
 
-# ── Feature 4: PDF export (Candidate Comparison report) ──────────────────────
+# PDF export
 reportlab>=4.0.0
 
-# ── Feature 7: Duplicate detection (embedding cosine similarity) ─────────────
-# Installs sentence-transformers + torch (CPU). ~500MB download on first use.
-# The model all-MiniLM-L6-v2 is downloaded automatically on first call (~80MB).
+# Duplicate detection
+# Installs sentence-transformers + torch. The embedding model downloads on
+# first use if it is not already cached.
 sentence-transformers>=2.7.0
 
-# ── Database ──────────────────────────────────────────────────────────────────
-# SQLite is used (built into Python — no extra package needed).
-# For PostgreSQL in production, add: psycopg2-binary>=2.9.0
-#   and change SQLALCHEMY_DATABASE_URI in .env to:
-#   postgresql://user:password@host:5432/dbname
-
-# ── OPTIONAL: Email providers (uncomment the one you choose for Feature 8) ────
-# sendgrid>=6.11.0           # SendGrid
-# mailgun2>=1.0.0            # Mailgun  (or use requests directly)
-# boto3>=1.34.0              # Amazon SES
-# (SMTP needs no extra package — use smtplib from Python stdlib)
-
-# ── OPTIONAL: Production task queue (replace threading.Thread in batch jobs) ──
+# Optional production dependencies:
+# psycopg2-binary>=2.9.0
+# sendgrid>=6.11.0
+# boto3>=1.34.0
 # celery>=5.3.0
 # redis>=5.0.0
-
-# ── OPTIONAL: Production WSGI server ─────────────────────────────────────────
 # gunicorn>=21.0.0
-python-docx
