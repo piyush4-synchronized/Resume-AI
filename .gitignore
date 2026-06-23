@@ -25,6 +25,11 @@ venv/
 ENV/
 env/
 
+# Local configuration and generated data
+.env
+instance/*.db
+*.db
+
 # IDE
 .vscode/
 .idea/
