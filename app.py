@@ -1,24 +1,10 @@
-from envs.Taskify.Lib import email
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
-try:
-    from flask_cors import CORS as _CORS
-    def _apply_cors(app): 
-        # Set supports_credentials=True to allow cookies
-        # Replace the URL with your exact frontend URL (e.g., Live Server port)
-        frontend_url = os.environ.get("CORS_ORIGIN", "http://127.0.0.1:5500") 
-        _CORS(app, supports_credentials=True, origins=[frontend_url, "http://localhost:5500"])
-except ImportError:
-    def _apply_cors(app):
-        @app.after_request
-        def _cors_headers(response):
-            # You must specify the exact origin when using credentials, '*' won't work
-            frontend_url = request.headers.get("Origin", "http://127.0.0.1:5500")
-            response.headers["Access-Control-Allow-Origin"] = frontend_url
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
-            response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-            return response
+from sqlalchemy import inspect, text
+from werkzeug.security import check_password_hash, generate_password_hash
+from datetime import datetime, timedelta, timezone
+import hashlib
+import secrets
 import joblib
 import pandas as pd
 import pdfplumber
@@ -26,6 +12,50 @@ import re
 import os
 import io
 import json
+import warnings
+
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+warnings.filterwarnings(
+    "ignore",
+    message=".*serialized model.*",
+    category=UserWarning,
+    module="xgboost.core",
+)
+try:
+    from flask_cors import CORS as _CORS
+    def _apply_cors(app): 
+        # Set supports_credentials=True to allow cookies
+        # Replace the URL with your exact frontend URL (e.g., Live Server port)
+        origins = [
+            origin.strip()
+            for origin in os.environ.get(
+                "CORS_ORIGIN",
+                "http://localhost:5000,http://127.0.0.1:5000,http://127.0.0.1:5500,http://localhost:5500",
+            ).split(",")
+            if origin.strip()
+        ]
+        _CORS(app, supports_credentials=True, origins=origins)
+except ImportError:
+    def _apply_cors(app):
+        @app.after_request
+        def _cors_headers(response):
+            # You must specify the exact origin when using credentials, '*' won't work
+            origin = request.headers.get("Origin")
+            allowed = {
+                item.strip()
+                for item in os.environ.get(
+                    "CORS_ORIGIN",
+                    "http://localhost:5000,http://127.0.0.1:5000,http://127.0.0.1:5500,http://localhost:5500",
+                ).split(",")
+                if item.strip()
+            }
+            if origin in allowed:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Vary"] = "Origin"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+            response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            return response
 # groq imported safely below after app init
 from dotenv import load_dotenv
 
@@ -39,11 +69,18 @@ import __main__
 __main__.split_skills = split_skills
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
 _apply_cors(app)
 
 # ── Database Configuration ───────────────────────────────────────────────────
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///resumeai.db'
+database_url = os.environ.get('DATABASE_URL') or os.environ.get('SQLALCHEMY_DATABASE_URI') or 'sqlite:///resumeai.db'
+if database_url.startswith('postgres://'):
+    database_url = database_url.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production'
 db = SQLAlchemy(app)
 
 class User(db.Model):
@@ -56,10 +93,35 @@ class AuthSession(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     token = db.Column(db.String(128), unique=True, nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    expires_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc) + timedelta(days=7))
     user = db.relationship('User', backref=db.backref('sessions', lazy=True))
+
+class ScanHistory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), index=True, nullable=False)
+    scan_type = db.Column(db.String(20), nullable=False, default='single')
+    job_role = db.Column(db.String(120), nullable=True)
+    payload = db.Column(db.JSON, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 with app.app_context():
     db.create_all()  # Automatically creates resumeai.db on first run
+    inspector = inspect(db.engine)
+    if 'auth_session' in inspector.get_table_names():
+        session_columns = {col['name'] for col in inspector.get_columns('auth_session')}
+        if db.engine.url.get_backend_name() == 'sqlite':
+            if 'created_at' not in session_columns:
+                db.session.execute(text("ALTER TABLE auth_session ADD COLUMN created_at DATETIME"))
+            if 'expires_at' not in session_columns:
+                db.session.execute(text("ALTER TABLE auth_session ADD COLUMN expires_at DATETIME"))
+            db.session.execute(
+                text(
+                    "UPDATE auth_session SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP), "
+                    "expires_at = COALESCE(expires_at, datetime(CURRENT_TIMESTAMP, '+7 days'))"
+                )
+            )
+            db.session.commit()
 
 # ── Groq client (optional — scoring works without it) ────────────────────────
 try:
@@ -78,7 +140,12 @@ _model = None
 def get_model():
     global _model
     if _model is None:
-        _model = joblib.load('resume_scorer_pipeline.pkl')
+        model_path = os.environ.get('SCORER_PKL_PATH', os.path.join(BASE_DIR, 'resume_scorer_pipeline.pkl'))
+        if not os.path.isabs(model_path):
+            model_path = os.path.join(BASE_DIR, model_path)
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Scoring model not found at {model_path}")
+        _model = joblib.load(model_path)
     return _model
 
 # ── File parsers ─────────────────────────────────────────────────────────────
@@ -694,11 +761,14 @@ def parse_file_to_text(file_obj):
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    import os
-    scorer_ok = os.path.exists('resume_scorer_pipeline.pkl')
+    scorer_path = os.environ.get('SCORER_PKL_PATH', os.path.join(BASE_DIR, 'resume_scorer_pipeline.pkl'))
+    if not os.path.isabs(scorer_path):
+        scorer_path = os.path.join(BASE_DIR, scorer_path)
+    scorer_ok = os.path.exists(scorer_path)
     return jsonify({
         'status': 'ok',
         'scorer_pkl': scorer_ok,
+        'database': app.config['SQLALCHEMY_DATABASE_URI'].split('@')[-1],
         'groq_client': groq_client is not None,
         'groq_key_set': bool(os.environ.get('GROQ_API_KEY')),
     })
@@ -706,6 +776,10 @@ def health():
 @app.route('/', methods=['GET'])
 def home():
     return render_template('resumeai_dashboard.html')
+
+@app.route('/favicon.ico', methods=['GET'])
+def favicon():
+    return send_from_directory(app.static_folder, 'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
 @app.route('/api/score', methods=['POST'])
 def score_resume():
@@ -731,7 +805,8 @@ def score_resume():
             "extracted_experience":a['exp'],"extracted_education":a['education'],
             "found_skills":a['found_skills'],"missing_skills":a['missing_skills'],
             "section_scores":a['section_scores'],"ats_score":a['ats_score'],
-            "ats_hits":a['ats_hits'],"target_company":target_company}
+            "ats_hits":a['ats_hits'],"target_company":target_company,
+            "predicted_category": a['guessed_category'], "raw_text": raw_text[:5000]}
         # Save to history for the logged-in user (non-fatal if no session)
         sess, _ = _get_session()
         if sess:
@@ -757,7 +832,8 @@ def score_resume_text():
             "extracted_experience":a['exp'],"extracted_education":a['education'],
             "found_skills":a['found_skills'],"missing_skills":a['missing_skills'],
             "section_scores":a['section_scores'],"ats_score":a['ats_score'],
-            "ats_hits":a['ats_hits'],"target_company":target_company}
+            "ats_hits":a['ats_hits'],"target_company":target_company,
+            "predicted_category": a['guessed_category'], "raw_text": raw_text[:5000]}
         sess, _ = _get_session()
         if sess:
             _save_scan(sess['email'], payload)
@@ -862,7 +938,7 @@ def batch_score():
     results, errors, files_to_process = [], [], []
     
     print("\n" + "="*50)
-    print(f"🚀 BATCH UPLOAD STARTED: Received {len(files)} uploaded item(s)")
+    print(f"BATCH UPLOAD STARTED: Received {len(files)} uploaded item(s)")
     
     # Retrieve user session for saving to history
     sess, _ = _get_session()
@@ -872,7 +948,7 @@ def batch_score():
     for f in files:
         name = f.filename.lower()
         if name.endswith('.zip') or f.mimetype in ['application/zip', 'application/x-zip-compressed']:
-            print(f"📦 Unzipping archive: {f.filename}...")
+            print(f"Unzipping archive: {f.filename}...")
             try:
                 zip_bytes = f.read()
                 with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as z:
@@ -893,13 +969,13 @@ def batch_score():
                             )
                             files_to_process.append(mock_file)
             except Exception as e:
-                print(f"❌ ZIP Error: {str(e)}")
+                print(f"ZIP Error: {str(e)}")
                 errors.append({"filename": f.filename, "error": f"Failed to extract: {str(e)}"})
         else:
             if name.endswith(('.pdf', '.docx', '.txt')):
                 files_to_process.append(f)
 
-    print(f"✅ Found {len(files_to_process)} valid resumes inside. Starting analysis...")
+    print(f"Found {len(files_to_process)} valid resumes inside. Starting analysis...")
     print("-" * 50)
 
     # Step 2: Sequential Processing with Live Terminal Updates
@@ -936,7 +1012,7 @@ def batch_score():
             errors.append({"filename": file_obj.filename, "error": str(e)})
 
     print("-" * 50)
-    print(f"🏁 BATCH COMPLETE: {len(results)} succeeded, {len(errors)} failed.")
+    print(f"BATCH COMPLETE: {len(results)} succeeded, {len(errors)} failed.")
     print("=" * 50 + "\n")
 
     # Step 3: Rank Candidates
@@ -956,11 +1032,9 @@ def batch_score():
     }
     
     if user_email:
-        if user_email not in _scan_history:
-            _scan_history[user_email] = []
         # Safely calculate average score to avoid division by zero
         avg = round(sum(r['ai_score'] for r in results) / max(1, len(results)), 1)
-        _scan_history[user_email].append({
+        _save_history_entry(user_email, {
             "type": "batch",
             "created_at": datetime.now().strftime("%b %d, %Y %H:%M"),
             "job_role": job_role,
@@ -983,9 +1057,6 @@ import uuid
 import io
 import zipfile
 from werkzeug.datastructures import FileStorage
-
-# Global memory store for background processing jobs
-_batch_jobs = {}
 
 @app.route('/api/batch-large', methods=['POST'])
 def batch_large():
@@ -1083,13 +1154,10 @@ def batch_large():
             r['rank'] = i
             
         _batch_jobs[j_id]["status"] = "done"
-        if email:
-            from datetime import datetime
-            if email not in _scan_history:
-                _scan_history[email] = []
+        if user_email:
             res_list = _batch_jobs[j_id]["results"]
             avg = round(sum(r['ai_score'] for r in res_list) / max(1, len(res_list)), 1)
-            _scan_history[email].append({
+            _save_history_entry(user_email, {
                 "type": "batch",
                 "created_at": datetime.now().strftime("%b %d, %Y %H:%M"),
                 "job_role": role,
@@ -1117,20 +1185,47 @@ def batch_status(job_id):
 # =============================================================================
 # AUTH ROUTES — Persistent SQLite Database
 # =============================================================================
-import hashlib, secrets
-from datetime import datetime
+SESSION_COOKIE_NAME = 'resumeai_token'
+SESSION_DAYS = int(os.environ.get('SESSION_DAYS', '7'))
 
-def _hash(pw): return hashlib.sha256(pw.encode()).hexdigest()
+def _hash(pw): return generate_password_hash(pw, method='pbkdf2:sha256', salt_length=16)
+
+def _verify_password(stored_hash, password):
+    if not stored_hash:
+        return False
+    if stored_hash.startswith(('pbkdf2:', 'scrypt:')):
+        return check_password_hash(stored_hash, password)
+    return stored_hash == hashlib.sha256(password.encode()).hexdigest()
+
 def _make_token(): return secrets.token_hex(32)
 
 def _get_session():
-    token = request.cookies.get('resumeai_token')
+    token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
         return None, None
     session_record = AuthSession.query.filter_by(token=token).first()
     if session_record and session_record.user:
+        expires_at = session_record.expires_at
+        if expires_at:
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at < datetime.now(timezone.utc):
+                db.session.delete(session_record)
+                db.session.commit()
+                return None, token
         return {"email": session_record.user.email, "role": session_record.user.role}, token
     return None, token
+
+def _set_auth_cookie(response, token):
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        httponly=True,
+        secure=app.config['SESSION_COOKIE_SECURE'],
+        samesite=app.config['SESSION_COOKIE_SAMESITE'],
+        max_age=86400 * SESSION_DAYS,
+    )
+    return response
 
 @app.route('/api/signup', methods=['POST'])
 def signup():
@@ -1157,13 +1252,15 @@ def signup():
     
     # Create persistent session
     token = _make_token()
-    new_session = AuthSession(token=token, user_id=new_user.id)
+    new_session = AuthSession(
+        token=token,
+        user_id=new_user.id,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS),
+    )
     db.session.add(new_session)
     db.session.commit()
     
-    resp = jsonify({"success": True, "role": role, "email": email})
-    resp.set_cookie('resumeai_token', token, httponly=True, samesite='Lax', max_age=86400*7)
-    return resp
+    return _set_auth_cookie(jsonify({"success": True, "role": role, "email": email}), token)
 
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -1176,18 +1273,22 @@ def login():
         
     # Verify user
     user = User.query.filter_by(email=email).first()
-    if not user or user.password_hash != _hash(password):
+    if not user or not _verify_password(user.password_hash, password):
         return jsonify({"success": False, "error": "Invalid email or password"}), 401
+    if not user.password_hash.startswith(('pbkdf2:', 'scrypt:')):
+        user.password_hash = _hash(password)
         
     # Create persistent session
     token = _make_token()
-    new_session = AuthSession(token=token, user_id=user.id)
+    new_session = AuthSession(
+        token=token,
+        user_id=user.id,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS),
+    )
     db.session.add(new_session)
     db.session.commit()
     
-    resp = jsonify({"success": True, "role": user.role, "email": email})
-    resp.set_cookie('resumeai_token', token, httponly=True, samesite='Lax', max_age=86400*7)
-    return resp
+    return _set_auth_cookie(jsonify({"success": True, "role": user.role, "email": email}), token)
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
@@ -1200,7 +1301,7 @@ def logout():
             db.session.commit()
             
     resp = jsonify({"success": True})
-    resp.delete_cookie('resumeai_token')
+    resp.delete_cookie(SESSION_COOKIE_NAME)
     return resp
 
 @app.route('/api/me', methods=['GET'])
@@ -1222,18 +1323,34 @@ def require_auth():
 
 _scan_history = {}   # email -> list of scan dicts
 
+def _save_history_entry(email, entry):
+    if not email:
+        return
+    if email not in _scan_history:
+        _scan_history[email] = []
+    _scan_history[email].append(entry)
+    try:
+        db.session.add(ScanHistory(
+            email=email,
+            scan_type=entry.get("type", "single"),
+            job_role=entry.get("job_role"),
+            payload=entry,
+        ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
 @app.route('/api/history', methods=['GET'])
 def get_history():
     sess, err = require_auth()
     if err: return err
-    scans = _scan_history.get(sess['email'], [])
-    return jsonify({"success": True, "history": list(reversed(scans))})
+    records = ScanHistory.query.filter_by(email=sess['email']).order_by(ScanHistory.created_at.desc()).all()
+    scans = [r.payload for r in records] if records else list(reversed(_scan_history.get(sess['email'], [])))
+    return jsonify({"success": True, "history": scans})
 
 def _save_scan(email, scan_data):
     """Called after every successful /api/score to persist to history."""
-    if email not in _scan_history:
-        _scan_history[email] = []
-    _scan_history[email].append({
+    _save_history_entry(email, {
         "type": "single",
         "created_at": datetime.now().strftime("%b %d, %Y %H:%M"),
         "job_role":       scan_data.get("job_role", "—"),
@@ -1327,6 +1444,60 @@ def analytics_overview():
                 "education":  s.get("details",{}).get("extracted_education","—"),
                 "created_at": s.get("created_at","—"),
             })
+    all_entries = []
+    records = ScanHistory.query.order_by(ScanHistory.created_at.desc()).all()
+    history_entries = [(record.email, record.payload, record.id) for record in records]
+    if not history_entries:
+        history_entries = [
+            (email, scan, abs(hash(f"{email}:{idx}:{scan.get('created_at', '')}")))
+            for email, scans in _scan_history.items()
+            for idx, scan in enumerate(scans)
+        ]
+
+    for email, s, record_id in history_entries:
+        if s.get("type") == "batch":
+            ranked = s.get("details", {}).get("ranked", [])
+            for idx, candidate in enumerate(ranked, 1):
+                stable_id = f"{record_id}-{idx}"
+                all_entries.append({
+                    "id": stable_id,
+                    "candidate_id": stable_id,
+                    "email": email,
+                    "filename": candidate.get("filename") or candidate.get("candidate_id") or f"Candidate {idx}",
+                    "job_role": s.get("job_role", "â€”"),
+                    "ai_score": candidate.get("ai_score", 0),
+                    "match_pct": candidate.get("match_pct", candidate.get("ai_score", 0)),
+                    "predicted_category": candidate.get("predicted_category", "Unclassified"),
+                    "experience": candidate.get("exp", 0),
+                    "exp": candidate.get("exp", 0),
+                    "education": candidate.get("education", "â€”"),
+                    "tier": candidate.get("tier") or _tier(candidate.get("ai_score", 0)),
+                    "found_skills": candidate.get("found_skills", []),
+                    "missing_skills": candidate.get("missing_skills", []),
+                    "section_scores": candidate.get("section_scores", {}),
+                    "created_at": s.get("created_at", "â€”"),
+                })
+        else:
+            details = s.get("details", {})
+            all_entries.append({
+                "id": str(record_id),
+                "candidate_id": str(record_id),
+                "email": email,
+                "filename": f"{email} resume",
+                "job_role": s.get("job_role", "â€”"),
+                "ai_score": s.get("ai_score", 0),
+                "match_pct": s.get("ai_score", 0),
+                "predicted_category": details.get("predicted_category", "Unclassified"),
+                "experience": details.get("extracted_experience", 0),
+                "exp": details.get("extracted_experience", 0),
+                "education": details.get("extracted_education", "â€”"),
+                "tier": s.get("tier") or _tier(s.get("ai_score", 0)),
+                "found_skills": details.get("found_skills", []),
+                "missing_skills": details.get("missing_skills", []),
+                "section_scores": details.get("section_scores", {}),
+                "created_at": s.get("created_at", "â€”"),
+            })
+
     all_entries.sort(key=lambda x: x['ai_score'], reverse=True)
     min_score  = float(request.args.get('min_score', 0))
     role_filter= request.args.get('job_role','').strip()
@@ -1498,4 +1669,5 @@ def batch_export_pdf(batch_id):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    debug = os.environ.get('FLASK_ENV') != 'production'
+    app.run(host='0.0.0.0', port=port, debug=debug)

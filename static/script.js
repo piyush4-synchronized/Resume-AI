@@ -5,6 +5,16 @@
 // file, before Chart.js setup) so there's no flash of the wrong theme.
 // ═══════════════════════════════════════════════════════════════════════
 const THEME_KEY = "resumeai_theme"; // stored value: 'light' | 'dark' | 'system'
+var ringInst = null,
+  radarInst = null,
+  doughInst = null,
+  benchInst = null,
+  batchBarInst = null;
+var ringInstVis = null,
+  radarInstVis = null,
+  doughInstVis = null,
+  benchInstVis = null;
+var analyticsCharts = {};
 
 function getStoredThemePref() {
   return localStorage.getItem(THEME_KEY) || "system";
@@ -218,10 +228,10 @@ function mirrorToDashboard(d) {
   }, 200);
 }
 
-let ringInstVis = null,
-  radarInstVis = null,
-  doughInstVis = null,
-  benchInstVis = null;
+ringInstVis = ringInstVis || null;
+radarInstVis = radarInstVis || null;
+doughInstVis = doughInstVis || null;
+benchInstVis = benchInstVis || null;
 
 // ── Dashboard feature runner ───────────────────────────────────────────────
 let activeFeatBtn = null;
@@ -280,6 +290,7 @@ async function runFeatureDash(type, btn) {
     const res = await fetch(ep[type], {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify(payload),
     });
     const data = await res.json();
@@ -300,11 +311,11 @@ async function runFeatureDash(type, btn) {
 // ─── State ───────────────────────────────────────────────────────────────
 let currentData = null,
   inputMode = "file";
-let ringInst = null,
-  radarInst = null,
-  doughInst = null,
-  benchInst = null,
-  batchBarInst = null;
+ringInst = ringInst || null;
+radarInst = radarInst || null;
+doughInst = doughInst || null;
+benchInst = benchInst || null;
+batchBarInst = batchBarInst || null;
 let batchFiles = [];
 let batchCache = null;
 
@@ -463,7 +474,7 @@ async function populateSettingsAccountInfo() {
   const roleEl = document.getElementById("settingsRole");
   if (!emailEl || !roleEl) return;
   try {
-    const res = await fetch("/api/me");
+    const res = await fetch("/api/me", { credentials: "include" });
     const data = await res.json();
     if (data.authenticated) {
       emailEl.textContent = data.email;
@@ -526,6 +537,7 @@ async function loadCandidatesOverview(page) {
 function renderCandidatesOverview(data) {
   candOverviewState.pages = data.pages || 1;
   candOverviewState.total = data.total || 0;
+  batchCache = data.candidates || [];
   const wrap = document.getElementById("candidatesListWrap");
 
   if (!data.candidates || data.candidates.length === 0) {
@@ -541,7 +553,7 @@ function renderCandidatesOverview(data) {
                   ${data.candidates
                     .map(
                       (c) => `
-                    <tr class="cand-row" tabindex="0" role="button" aria-label="View ${c.filename} details" onclick="openCandidateDrawer(${c.id})" onkeydown="if(event.key==='Enter')openCandidateDrawer(${c.id})">
+                    <tr class="cand-row" tabindex="0" role="button" aria-label="View ${c.filename} details" onclick='openCandidateDrawer(${JSON.stringify(String(c.candidate_id ?? c.id))})' onkeydown='if(event.key==="Enter")openCandidateDrawer(${JSON.stringify(String(c.candidate_id ?? c.id))})'>
                       <td style="font-size:.78rem;color:var(--muted-fg)">#${c.id}</td>
                       <td style="font-weight:500;font-size:.82rem">${c.filename || "—"}</td>
                       <td><span class="score-badge" style="background:rgba(139,92,246,.1);color:var(--accent);border-color:rgba(139,92,246,.3)">${c.ai_score}</span></td>
@@ -935,7 +947,11 @@ async function analyzeResume() {
       fd.append("job_role", role);
       fd.append("job_description", jdText); // <-- Append JD text to the form data
 
-      const res = await fetch("/api/score", { method: "POST", body: fd });
+      const res = await fetch("/api/score", {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
       await requireLoggedIn(res);
       data = await res.json();
     } else {
@@ -950,6 +966,7 @@ async function analyzeResume() {
       const res = await fetch("/api/score-text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         // <-- Add job_description to the JSON payload
         body: JSON.stringify({
           text,
@@ -1240,6 +1257,7 @@ async function runFeature(type) {
     const res = await fetch(ep[type], {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify(payload),
     });
     const data = await res.json();
@@ -1614,7 +1632,7 @@ let visibleCols = {
   skills: true,
   status: true,
 };
-let analyticsCharts = {}; // name -> Chart instance
+analyticsCharts = analyticsCharts || {}; // name -> Chart instance
 
 const BATCH_POLL_INTERVAL_MS = 600; // was 1500 — scoring itself is fast (no LLM calls per resume), so a long poll interval was adding perceptible delay on top of actual processing time
 
@@ -1655,7 +1673,11 @@ async function runBatch() {
 
 // ─── Small batch: synchronous, ≤20 resumes, single request/response ──────
 async function runSmallBatch(fd) {
-  const res = await fetch("/api/batch-score", { method: "POST", body: fd });
+  const res = await fetch("/api/batch-score", {
+    method: "POST",
+    body: fd,
+    credentials: "include",
+  });
   await requireLoggedIn(res);
   const data = await res.json();
 
@@ -1678,7 +1700,11 @@ async function runSmallBatch(fd) {
 
 // ─── Large batch: async job + polling, up to 1000 resumes ────────────────
 async function runLargeBatch(fd) {
-  const res = await fetch("/api/batch-large", { method: "POST", body: fd });
+  const res = await fetch("/api/batch-large", {
+    method: "POST",
+    body: fd,
+    credentials: "include",
+  });
   await requireLoggedIn(res);
   const data = await res.json();
   if (!data.success) throw new Error(data.error);
@@ -1690,7 +1716,9 @@ async function runLargeBatch(fd) {
   return new Promise((resolve, reject) => {
     const poll = async () => {
       try {
-        const statusRes = await fetch(`/api/batch-status/${jobId}`);
+        const statusRes = await fetch(`/api/batch-status/${jobId}`, {
+          credentials: "include",
+        });
         await requireLoggedIn(statusRes);
         const job = await statusRes.json();
         if (job.error) {
@@ -1934,7 +1962,7 @@ function renderCandidateTable() {
         const tds = COL_DEFS.filter((c) => visibleCols[c.key])
           .map((c) => cells[c.key])
           .join("");
-        return `<tr class="cand-row" tabindex="0" role="button" aria-label="View ${r.filename} details" onclick="openCandidateDrawer(${r.candidate_id})" onkeydown="if(event.key==='Enter')openCandidateDrawer(${r.candidate_id})">${tds}</tr>`;
+        return `<tr class="cand-row" tabindex="0" role="button" aria-label="View ${r.filename} details" onclick='openCandidateDrawer(${JSON.stringify(String(r.candidate_id ?? r.filename))})' onkeydown='if(event.key==="Enter")openCandidateDrawer(${JSON.stringify(String(r.candidate_id ?? r.filename))})'>${tds}</tr>`;
       })
       .join("");
   }
@@ -2535,6 +2563,7 @@ async function exportPDFReport() {
       tableState.minScore > 0 ? tableState.minScore : SHORTLIST_THRESHOLD;
     const res = await fetch(
       `/api/analytics/batch/${currentBatchRunId}/export-pdf?threshold=${threshold}`,
+      { credentials: "include" },
     );
     await requireLoggedIn(res);
     if (!res.ok) {
@@ -2563,7 +2592,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 async function initSession() {
   try {
-    const res = await fetch("/api/me");
+    const res = await fetch("/api/me", { credentials: "include" });
     const data = await res.json();
     if (!res.ok || !data.authenticated) throw new Error("Not signed in");
     localStorage.setItem("resumeai_role", data.role);
@@ -2656,7 +2685,7 @@ async function handleAuth() {
 }
 
 async function logoutUser() {
-  await fetch("/api/logout", { method: "POST" });
+  await fetch("/api/logout", { method: "POST", credentials: "include" });
   localStorage.removeItem("resumeai_role");
   document.getElementById("sessionStatus").textContent = "Offline";
   document.getElementById("logoutBtn").style.display = "none";

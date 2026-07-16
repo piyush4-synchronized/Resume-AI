@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ResumeAI — Neural Candidate Scoring</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any" />
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='resumeai-logo.webp') }}" />
     <link
       href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
@@ -14,7 +16,9 @@
   <body>
     <div id="roleGateway" class="gateway-overlay">
       <div class="gateway-card" style="max-width: 400px; padding: 2.5rem;">
-        <h2>ResumeAI</h2>
+        <div class="auth-brand" aria-label="ResumeAI">
+          <img src="{{ url_for('static', filename='resumeai-logo.webp') }}" alt="ResumeAI logo" />
+        </div>
         <p id="authSubtitle">Sign in to your workspace</p>
         
         <div style="display:flex; flex-direction:column; gap:1rem; margin-bottom:1.5rem; text-align:left;">
@@ -54,10 +58,10 @@
         <button class="nav-burger" id="navBurger" onclick="toggleMobileNav()" aria-label="Toggle navigation menu" aria-expanded="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
-        <div class="logo">
-          <div class="logo-dot"></div>
-          ResumeAI
-        </div>
+        <button class="logo" type="button" onclick="navigateTo('dashboard', document.querySelector('.nav-tab[data-nav=\'dashboard\']'))" aria-label="ResumeAI dashboard">
+          <img src="{{ url_for('static', filename='resumeai-logo.webp') }}" alt="ResumeAI logo" />
+          <span>ResumeAI</span>
+        </button>
       </div>
       <div class="nav-tabs" id="navTabs">
         <button class="nav-tab active" data-nav="dashboard" onclick="navigateTo('dashboard', this)">Dashboard</button>
@@ -1154,6 +1158,14 @@
     </div>
 
     <button class="fab" id="quickUploadFab" title="Quick upload" aria-label="Quick upload resume" onclick="handleFabClick()">⬆</button>
+
+    <footer class="app-footer">
+      <button class="footer-brand" type="button" onclick="navigateTo('dashboard', document.querySelector('.nav-tab[data-nav=\'dashboard\']'))" aria-label="ResumeAI dashboard">
+        <img src="{{ url_for('static', filename='resumeai-logo.webp') }}" alt="ResumeAI logo" />
+        <span>ResumeAI</span>
+      </button>
+      <span>&copy; 2026 ResumeAI. All rights reserved.</span>
+    </footer>
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
   </body>
